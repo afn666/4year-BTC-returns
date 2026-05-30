@@ -129,18 +129,18 @@ footer{font-size:11px;color:var(--muted);border-top:1px solid var(--border);padd
 </div>
 
 <div class="section-block chart-section">
-  <div class="section-label">Bitcoin price coloured by 4-year annualised return from that date</div>
-  <div class="chart-wrap">
-    <canvas id="priceChart" role="img" aria-label="Bitcoin price chart coloured by the annualised 4-year return from each date. Green indicates high future returns, amber indicates lower returns, grey indicates periods where the 4-year exit has not yet occurred."></canvas>
+  <div class="section-label">4-year annualised return by buy date · vertical lines = halving dates</div>
+  <div class="chart-wrap" style="height:300px">
+    <canvas id="returnChart" role="img" aria-label="Scatter chart showing the annualised 4-year return for each buy date from 2011 to 2022, with vertical lines marking Bitcoin halving dates."></canvas>
   </div>
   <div class="chart-legend" id="chartLegend">
-    <span style="font-size:10px;color:var(--muted);margin-right:4px;">Annualised return from that date:</span>
+    <span style="font-size:10px;color:var(--muted);margin-right:4px;">Annualised return:</span>
     <span class="legend-item"><span class="legend-swatch" style="background:#16a34a"></span>200%+</span>
     <span class="legend-item"><span class="legend-swatch" style="background:#4ade80"></span>100–200%</span>
     <span class="legend-item"><span class="legend-swatch" style="background:#a3e635"></span>50–100%</span>
     <span class="legend-item"><span class="legend-swatch" style="background:#facc15"></span>25–50%</span>
     <span class="legend-item"><span class="legend-swatch" style="background:#f59e0b"></span>0–25%</span>
-    <span class="legend-item"><span class="legend-swatch" style="background:#3a4560"></span>Exit not yet reached</span>
+    <span class="legend-item" style="margin-left:8px"><span style="display:inline-block;width:2px;height:12px;background:rgba(255,255,255,0.3);vertical-align:middle;margin-right:5px"></span>Halving</span>
   </div>
 </div>
 
@@ -237,7 +237,7 @@ pctiles.forEach(p => {
 });
 
 function arToColor(ar) {
-  if (ar === null) return '#3a4560';
+  if (ar === null) return null;
   if (ar >= 200) return '#16a34a';
   if (ar >= 100) return '#4ade80';
   if (ar >= 50)  return '#a3e635';
@@ -245,25 +245,56 @@ function arToColor(ar) {
   return '#f59e0b';
 }
 
-const pointColors = CHART_AR.map(ar => arToColor(ar));
+const HALVINGS = ['2012-11-28','2016-07-09','2020-05-11','2024-04-20'];
 
-const logPrices = CHART_PRICES.map(p => Math.log10(p));
+const returnScatterData = ALL_DATA.map(r => ({ x: r.b, y: r.ar, idx: r.b }));
+const returnColors = ALL_DATA.map(r => arToColor(r.ar));
 
-new Chart(document.getElementById('priceChart'), {
+const halvingPlugin = {
+  id: 'halvingLines',
+  afterDraw(chart) {
+    const ctx = chart.ctx;
+    const xAxis = chart.scales.x;
+    const yAxis = chart.scales.y;
+    HALVINGS.forEach(date => {
+      const idx = ALL_DATA.findIndex(r => r.b >= date);
+      if (idx < 0) return;
+      const x = xAxis.getPixelForValue(idx);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(x, yAxis.top);
+      ctx.lineTo(x, yAxis.bottom);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.font = "10px 'DM Mono',monospace";
+      ctx.textAlign = 'center';
+      ctx.fillText('Halving ' + date.slice(0,7), x, yAxis.top - 4);
+      ctx.restore();
+    });
+  }
+};
+
+new Chart(document.getElementById('returnChart'), {
   type: 'scatter',
+  plugins: [halvingPlugin],
   data: {
     datasets: [{
-      data: CHART_DATES.map((d, i) => ({ x: d, y: logPrices[i] })),
-      pointBackgroundColor: pointColors,
-      pointBorderColor: pointColors,
-      pointRadius: 1.8,
-      pointHoverRadius: 4,
+      data: returnScatterData,
+      pointBackgroundColor: returnColors,
+      pointBorderColor: returnColors,
+      pointRadius: 1.5,
+      pointHoverRadius: 5,
     }]
   },
   options: {
     responsive: true,
     maintainAspectRatio: false,
     animation: false,
+    layout: { padding: { top: 20 } },
+    interaction: { mode: 'nearest', intersect: true },
     plugins: {
       legend: {display: false},
       tooltip: {
@@ -275,28 +306,30 @@ new Chart(document.getElementById('priceChart'), {
         callbacks: {
           title: items => items[0].raw.x,
           label: item => {
-            const i = CHART_DATES.indexOf(item.raw.x);
-            const p = CHART_PRICES[i];
-            const ar = CHART_AR[i];
-            const priceStr = p >= 1000 ? '$' + Math.round(p).toLocaleString() : '$' + p.toFixed(2);
-            const arStr = ar !== null ? ' · 4yr return: ' + ar.toFixed(1) + '%/yr' : ' · 4yr exit not yet reached';
-            return priceStr + arStr;
+            const r = dataByDate[item.raw.x];
+            if (!r) return '';
+            return ['Buy: $' + (r.bp >= 1000 ? Math.round(r.bp).toLocaleString() : r.bp.toFixed(2)),
+                    'Sell: $' + (r.sp >= 1000 ? Math.round(r.sp).toLocaleString() : r.sp.toFixed(2)),
+                    'Annualised: ' + r.ar.toFixed(1) + '%/yr',
+                    'Rank: #' + r.rank + ' of ' + ALL_DATA.length];
           }
         }
       }
     },
     scales: {
       x: {
-        type: 'category',
+        type: 'linear',
+        min: 0,
+        max: ALL_DATA.length - 1,
         ticks: {
           font: {size:10, family:"'DM Mono',monospace"},
           color: '#7a8099',
           maxTicksLimit: 8,
           autoSkip: true,
           maxRotation: 0,
-          callback: (val, idx) => {
-            const d = CHART_DATES[idx];
-            return d ? d.slice(0,7) : '';
+          callback: (val) => {
+            const r = ALL_DATA[Math.round(val)];
+            return r ? r.b.slice(0,7) : '';
           }
         },
         grid: {display: false},
@@ -306,11 +339,16 @@ new Chart(document.getElementById('priceChart'), {
         ticks: {
           font: {size:10, family:"'DM Mono',monospace"},
           color: '#7a8099',
-          callback: v => '$' + Math.round(Math.pow(10, v)).toLocaleString()
+          callback: v => v.toFixed(0) + '%'
         },
         grid: {color: '#1a2030'},
         border: {color: '#2a3045'},
-        title: {display:false}
+        title: {
+          display: true,
+          text: 'Annualised 4yr return',
+          color: '#7a8099',
+          font: {size:10, family:"'DM Mono',monospace"}
+        }
       }
     }
   }
@@ -322,7 +360,7 @@ new Chart(document.getElementById('histChart'), {
     labels: ['0–50%','50–100%','100–150%','150–200%','200–250%','250–300%','300%+'],
     datasets: [{
       data: BUCKETS,
-      backgroundColor: BUCKETS.map((_,i) => i===1||i===2 ? '#f0c040' : '#2a3a5a'),
+      backgroundColor: '#2a4a7a',
       borderWidth: 0,
       borderRadius: 3,
     }]
